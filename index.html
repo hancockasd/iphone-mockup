@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>iPhone 17 Mockup Tool</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>iPhone 17 Mockup Tool</h1>
+  <span class="subtitle">Drop a screenshot → composite onto frame → download</span>
+</header>
+
+<div class="app-layout">
+
+  <!-- ── Sidebar ─────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+
+    <!-- Model picker -->
+    <div class="section">
+      <div class="section-label">Model</div>
+      <div class="model-list">
+        <button class="model-btn active" data-model="iPhone 17">iPhone 17</button>
+        <button class="model-btn" data-model="iPhone 17 Pro">iPhone 17 Pro</button>
+        <button class="model-btn" data-model="iPhone 17 Pro Max">iPhone 17 Pro Max</button>
+        <button class="model-btn" data-model="iPhone Air">iPhone Air</button>
+      </div>
+    </div>
+
+    <!-- Color picker -->
+    <div class="section">
+      <div class="section-label">Color</div>
+      <div class="color-grid" id="color-grid">
+        <!-- Populated dynamically by app.js -->
+      </div>
+    </div>
+
+    <!-- Upload -->
+    <div class="section">
+      <div class="section-label">Screenshot</div>
+      <div class="upload-area" id="upload-area">
+        <input type="file" id="file-input" accept="image/*">
+        <span class="upload-icon">⬆</span>
+        <p>Click or drag & drop<br>your screenshot here</p>
+        <p class="upload-hint">PNG, JPG, WEBP supported</p>
+      </div>
+      <div class="uploaded-name" id="uploaded-name"></div>
+    </div>
+
+    <!-- Calibration -->
+    <div class="section calibration-section">
+      <details>
+        <summary>
+          Screen Area Calibration
+          <span class="arrow">▶</span>
+        </summary>
+        <div class="cal-body">
+          <div class="cal-grid">
+            <div class="cal-field">
+              <label for="cal-x">X (px)</label>
+              <input type="number" id="cal-x" placeholder="0" min="0">
+            </div>
+            <div class="cal-field">
+              <label for="cal-y">Y (px)</label>
+              <input type="number" id="cal-y" placeholder="0" min="0">
+            </div>
+            <div class="cal-field">
+              <label for="cal-w">Width (px)</label>
+              <input type="number" id="cal-w" placeholder="0" min="1">
+            </div>
+            <div class="cal-field">
+              <label for="cal-h">Height (px)</label>
+              <input type="number" id="cal-h" placeholder="0" min="1">
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" id="btn-auto-detect">Auto-Detect</button>
+            <button class="btn btn-primary" id="btn-apply-cal">Apply &amp; Save</button>
+          </div>
+          <div class="cal-status info" id="cal-status">
+            Load a frame to begin calibration
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <!-- Download -->
+    <div class="download-section">
+      <button id="btn-download" disabled>Download PNG</button>
+    </div>
+
+  </aside>
+
+  <!-- ── Preview ─────────────────────────────────────────────────── -->
+  <main class="preview-area">
+    <div id="preview-placeholder" class="preview-placeholder">
+      <span class="big-icon">📱</span>
+      <p>Upload a screenshot to preview</p>
+      <p class="sub">Select a model and color, then upload your screenshot</p>
+    </div>
+    <canvas id="preview-canvas"></canvas>
+    <div class="frame-status" id="frame-status">No frame loaded</div>
+  </main>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
