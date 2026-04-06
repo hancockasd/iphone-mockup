@@ -4,14 +4,14 @@ A browser-based tool for compositing screenshots onto iPhone frame PNGs. Select 
 
 ## Usage
 
-Serve the project over HTTP (required for canvas pixel access):
+**Online:** Open the deployed app at [https://iphone-mockup.pages.dev](https://iphone-mockup.pages.dev)
+
+**Local development:** The tool requires HTTP serving (not `file://`) due to browser CORS restrictions on `getImageData`. Serve locally with:
 
 ```bash
 python -m http.server 8080
 # then open http://localhost:8080
 ```
-
-Opening `index.html` directly via `file://` will fail due to browser CORS restrictions on `getImageData`.
 
 ## Workflow
 
