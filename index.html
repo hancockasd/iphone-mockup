@@ -4,19 +4,31 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>iPhone 17 Mockup Tool</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <header>
-  <h1>iPhone 17 Mockup Tool</h1>
+  <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar">
+    <span></span><span></span><span></span>
+  </button>
+  <div class="header-brand">
+    <h1>Mockup<em>Studio</em></h1>
+    <span class="header-tag">iPhone 17 Series</span>
+  </div>
   <span class="subtitle">Drop a screenshot → composite onto frame → download</span>
 </header>
 
 <div class="app-layout">
 
+  <!-- ── Sidebar overlay backdrop ──────────────────────────────── -->
+  <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
   <!-- ── Sidebar ─────────────────────────────────────────────────── -->
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar">
 
     <!-- Model picker -->
     <div class="section">

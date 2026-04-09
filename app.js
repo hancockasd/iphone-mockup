@@ -428,6 +428,38 @@
     }
   });
 
+  // ─── Sidebar toggle (mobile) ──────────────────────────────────────────────
+  const sidebarEl   = document.getElementById('sidebar');
+  const toggleBtn   = document.getElementById('sidebar-toggle');
+  const backdropEl  = document.getElementById('sidebar-backdrop');
+
+  function openSidebar() {
+    sidebarEl.classList.add('is-open');
+    backdropEl.classList.add('is-visible');
+    toggleBtn.classList.add('is-open');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeSidebar() {
+    sidebarEl.classList.remove('is-open');
+    backdropEl.classList.remove('is-visible');
+    toggleBtn.classList.remove('is-open');
+    document.body.style.overflow = '';
+  }
+
+  toggleBtn.addEventListener('click', () => {
+    sidebarEl.classList.contains('is-open') ? closeSidebar() : openSidebar();
+  });
+
+  backdropEl.addEventListener('click', closeSidebar);
+
+  // Close sidebar when a model or color is selected on mobile
+  document.querySelectorAll('.model-btn, #color-grid').forEach(el => {
+    el.addEventListener('click', () => {
+      if (window.innerWidth <= 768) closeSidebar();
+    });
+  });
+
   // ─── Init ─────────────────────────────────────────────────────────────────
   buildColorGrid(currentModel);
   loadFrame(currentModel, currentColor);
