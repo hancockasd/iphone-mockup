@@ -428,27 +428,44 @@
     }
   });
 
-  // ─── Sidebar toggle (mobile) ──────────────────────────────────────────────
+  // ─── Sidebar toggle ───────────────────────────────────────────────────────
   const sidebarEl   = document.getElementById('sidebar');
   const toggleBtn   = document.getElementById('sidebar-toggle');
   const backdropEl  = document.getElementById('sidebar-backdrop');
+  const appLayout   = document.querySelector('.app-layout');
+
+  const isMobile = () => window.innerWidth <= 768;
 
   function openSidebar() {
-    sidebarEl.classList.add('is-open');
-    backdropEl.classList.add('is-visible');
+    if (isMobile()) {
+      sidebarEl.classList.add('is-open');
+      backdropEl.classList.add('is-visible');
+      document.body.style.overflow = 'hidden';
+    } else {
+      appLayout.classList.remove('sidebar-collapsed');
+    }
     toggleBtn.classList.add('is-open');
-    document.body.style.overflow = 'hidden';
   }
 
   function closeSidebar() {
-    sidebarEl.classList.remove('is-open');
-    backdropEl.classList.remove('is-visible');
+    if (isMobile()) {
+      sidebarEl.classList.remove('is-open');
+      backdropEl.classList.remove('is-visible');
+      document.body.style.overflow = '';
+    } else {
+      appLayout.classList.add('sidebar-collapsed');
+    }
     toggleBtn.classList.remove('is-open');
-    document.body.style.overflow = '';
+  }
+
+  function isSidebarOpen() {
+    return isMobile()
+      ? sidebarEl.classList.contains('is-open')
+      : !appLayout.classList.contains('sidebar-collapsed');
   }
 
   toggleBtn.addEventListener('click', () => {
-    sidebarEl.classList.contains('is-open') ? closeSidebar() : openSidebar();
+    isSidebarOpen() ? closeSidebar() : openSidebar();
   });
 
   backdropEl.addEventListener('click', closeSidebar);
@@ -456,7 +473,7 @@
   // Close sidebar when a model or color is selected on mobile
   document.querySelectorAll('.model-btn, #color-grid').forEach(el => {
     el.addEventListener('click', () => {
-      if (window.innerWidth <= 768) closeSidebar();
+      if (isMobile()) closeSidebar();
     });
   });
 

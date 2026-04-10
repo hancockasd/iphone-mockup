@@ -22,6 +22,14 @@ python -m http.server 8080
 
 Screen coordinates are auto-detected on first use and saved to `localStorage`. Use the **Screen Area Calibration** panel to re-detect or fine-tune manually.
 
+## UI
+
+The interface uses a collapsible sidebar panel:
+
+- **Toggle button** — located in the sidebar header next to the "Model" label (box with arrow icon). Click to collapse or expand the sidebar.
+- **Desktop** — sidebar is fixed at a fluid width (`clamp(240px, 22vw, 360px)`) that scales with the viewport. Collapsing it slides the panel off-screen and pins the toggle button to the left edge of the viewport so it's always reachable.
+- **Mobile (≤768px)** — sidebar opens as a full-height overlay drawer. A darkened backdrop appears behind it; tapping the backdrop or selecting a model/color closes it automatically.
+
 ## Supported Models and Colors
 
 | Model | Colors |

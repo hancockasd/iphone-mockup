@@ -24,7 +24,7 @@
   --red: #ff3b55;
   --radius: 10px;
   --radius-lg: 16px;
-  --sidebar-width: 300px;
+  --sidebar-width: clamp(240px, 22vw, 360px);
   --header-height: 60px;
   --font-sans: 'Sora', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', monospace;
@@ -97,50 +97,62 @@ header .subtitle {
   letter-spacing: 0.1px;
 }
 
+/* ─── Sidebar section row (label + toggle on same line) ───────────────────── */
+
+.section-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.section-row .section-label {
+  margin-bottom: 0;
+}
+
 /* ─── Sidebar Toggle Button ────────────────────────────────────────────────── */
 
 .sidebar-toggle {
-  display: none;
-  flex-direction: column;
-  justify-content: center;
+  display: flex;
   align-items: center;
-  gap: 4.5px;
-  width: 36px;
-  height: 36px;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
   background: var(--surface2);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 7px;
   cursor: pointer;
   padding: 0;
   flex-shrink: 0;
-  transition: border-color 0.15s, background 0.15s;
+  color: var(--text-muted);
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.sidebar-toggle svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .sidebar-toggle:hover {
   border-color: var(--border-light);
   background: var(--surface3);
+  color: var(--text-secondary);
 }
 
-.sidebar-toggle span {
-  display: block;
-  width: 16px;
-  height: 1.5px;
-  background: var(--text-secondary);
-  border-radius: 2px;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  transform-origin: center;
+/* Collapsed: button escapes sidebar and pins to left edge of viewport */
+.app-layout.sidebar-collapsed .sidebar-toggle {
+  position: fixed;
+  left: 12px;
+  top: calc(var(--header-height) + 18px);
+  z-index: 50;
+  background: var(--surface2);
+  border-color: var(--border-light);
+  box-shadow: 2px 0 12px rgba(0,0,0,0.4);
 }
 
-/* X state when open */
-.sidebar-toggle.is-open span:nth-child(1) {
-  transform: translateY(6px) rotate(45deg);
-}
-.sidebar-toggle.is-open span:nth-child(2) {
-  opacity: 0;
-  transform: scaleX(0);
-}
-.sidebar-toggle.is-open span:nth-child(3) {
-  transform: translateY(-6px) rotate(-45deg);
+.app-layout.sidebar-collapsed .sidebar-toggle svg {
+  transform: rotate(180deg);
 }
 
 /* ─── Layout ───────────────────────────────────────────────────────────────── */
@@ -149,6 +161,16 @@ header .subtitle {
   display: grid;
   grid-template-columns: var(--sidebar-width) 1fr;
   height: calc(100vh - var(--header-height));
+  transition: grid-template-columns 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.app-layout.sidebar-collapsed {
+  grid-template-columns: 0 1fr;
+}
+
+.app-layout.sidebar-collapsed .sidebar {
+  overflow: hidden;
+  border-right-color: transparent;
 }
 
 /* ─── Sidebar backdrop (mobile overlay) ───────────────────────────────────── */
@@ -650,19 +672,14 @@ header .subtitle {
 /* ─── Mobile / Responsive ──────────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
-  /* Show hamburger toggle */
-  .sidebar-toggle {
-    display: flex;
+  /* Show backdrop */
+  .sidebar-backdrop {
+    display: block;
   }
 
   /* Hide header subtitle on small screens */
   header .subtitle {
     display: none;
-  }
-
-  /* Show backdrop */
-  .sidebar-backdrop {
-    display: block;
   }
 
   /* Full-height layout without sidebar column */
@@ -687,6 +704,16 @@ header .subtitle {
 
   .sidebar.is-open {
     transform: translateX(0);
+  }
+
+  /* On mobile, never use the collapsed fixed-pin behavior */
+  .app-layout.sidebar-collapsed .sidebar-toggle {
+    position: static;
+    box-shadow: none;
+  }
+
+  .app-layout.sidebar-collapsed .sidebar-toggle svg {
+    transform: none;
   }
 
   /* Preview fills full width */
