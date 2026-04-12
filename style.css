@@ -669,6 +669,50 @@ header .subtitle {
 ::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 2px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
+/* ─── Mobile open button (floating, outside sidebar) ──────────────────────── */
+
+.sidebar-open-btn {
+  display: none; /* hidden on desktop */
+}
+
+@media (max-width: 768px) {
+  .sidebar-open-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    left: 12px;
+    top: calc(var(--header-height) + 18px);
+    z-index: 50;
+    width: 36px;
+    height: 36px;
+    background: var(--surface2);
+    border: 1px solid var(--border-light);
+    border-radius: 9px;
+    cursor: pointer;
+    padding: 0;
+    color: var(--text-secondary);
+    box-shadow: 2px 0 12px rgba(0,0,0,0.4);
+    transition: border-color 0.15s, background 0.15s, color 0.15s;
+  }
+
+  .sidebar-open-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .sidebar-open-btn:hover {
+    border-color: var(--accent-bright);
+    background: var(--surface3);
+    color: var(--text);
+  }
+
+  /* Hide the open button when sidebar is open (backdrop covers it anyway) */
+  .sidebar-open-btn.hidden {
+    display: none;
+  }
+}
+
 /* ─── Mobile / Responsive ──────────────────────────────────────────────────── */
 
 @media (max-width: 768px) {

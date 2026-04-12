@@ -433,6 +433,7 @@
   const toggleBtn   = document.getElementById('sidebar-toggle');
   const backdropEl  = document.getElementById('sidebar-backdrop');
   const appLayout   = document.querySelector('.app-layout');
+  const openBtn     = document.getElementById('sidebar-open-btn');
 
   const isMobile = () => window.innerWidth <= 768;
 
@@ -441,6 +442,7 @@
       sidebarEl.classList.add('is-open');
       backdropEl.classList.add('is-visible');
       document.body.style.overflow = 'hidden';
+      openBtn.classList.add('hidden');
     } else {
       appLayout.classList.remove('sidebar-collapsed');
     }
@@ -452,6 +454,7 @@
       sidebarEl.classList.remove('is-open');
       backdropEl.classList.remove('is-visible');
       document.body.style.overflow = '';
+      openBtn.classList.remove('hidden');
     } else {
       appLayout.classList.add('sidebar-collapsed');
     }
@@ -467,6 +470,8 @@
   toggleBtn.addEventListener('click', () => {
     isSidebarOpen() ? closeSidebar() : openSidebar();
   });
+
+  openBtn.addEventListener('click', openSidebar);
 
   backdropEl.addEventListener('click', closeSidebar);
 
