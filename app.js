@@ -8,6 +8,9 @@
   let screenshotImg = null;
   let frameLoaded = false;
 
+  // Cache for autoDetectScreen results and loaded Image objects, keyed by "model|color"
+  const frameCache = {}; // key -> { img, result: { coords, bounds }, mask: ImageData }
+
   const MODEL_COLORS = {
     'iPhone 17':         ['Black', 'White', 'Lavender', 'Mist Blue', 'Sage'],
     'iPhone 17 Pro':     ['Cosmic Orange', 'Deep Blue', 'Silver'],
@@ -223,12 +226,12 @@
     screenHoleMask = null;
     frameStatusEl.textContent = 'Loading frame…';
 
-    const img = new Image();
-    img.onload = () => {
-      frameImg = img;
-      frameLoaded = true;
+    const cacheKey = `${model}|${color}`;
 
-      const result = autoDetectScreen(img);
+    function applyFrame(img, result, mask) {
+      frameImg = img;
+      screenHoleMask = mask;
+      frameLoaded = true;
       if (result) frameBounds = result.bounds;
 
       frameStatusEl.textContent =
@@ -247,6 +250,21 @@
       }
 
       composite();
+    }
+
+    // Return cached result immediately — no re-download, no re-computation
+    if (frameCache[cacheKey]) {
+      const cached = frameCache[cacheKey];
+      applyFrame(cached.img, cached.result, cached.mask);
+      return;
+    }
+
+    const img = new Image();
+    img.onload = () => {
+      const result = autoDetectScreen(img);
+      const mask = screenHoleMask; // set as side-effect by autoDetectScreen
+      frameCache[cacheKey] = { img, result, mask };
+      applyFrame(img, result, mask);
     };
     img.onerror = () => {
       frameStatusEl.textContent = 'Frame not found';

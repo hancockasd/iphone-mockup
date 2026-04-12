@@ -745,6 +745,9 @@ header .subtitle {
     transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
     box-shadow: 4px 0 40px rgba(0, 0, 0, 0.6);
     border-right: 1px solid var(--border-light);
+    display: block;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .sidebar.is-open {
