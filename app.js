@@ -2,14 +2,19 @@
   // ─── State ────────────────────────────────────────────────────────────────
   let currentModel = 'iPhone 17';
   let currentColor = 'Black';
-  let frameImg = null;
-  let frameBounds = null;   // non-transparent bounding box (for download crop)
-  let screenHoleMask = null; // pixel-perfect ImageData mask of screen hole only
   let screenshotImg = null;
-  let frameLoaded = false;
 
-  // Cache for autoDetectScreen results and loaded Image objects, keyed by "model|color"
-  const frameCache = {}; // key -> { img, result: { coords, bounds }, mask: ImageData }
+  // Preview state (half-res)
+  let previewFrameImg = null;
+  let previewMask = null;
+  let previewBounds = null;
+  let previewLoaded = false;
+
+  // Scale factor for preview (0.5 = half resolution, 1/4 pixel count)
+  const PREVIEW_SCALE = 0.5;
+
+  // Cache: key -> { previewImg, previewMask, previewResult, fullImg (lazy) }
+  const frameCache = {};
 
   // Web Worker for off-thread screen detection
   const detectWorker = new Worker('detect-worker.js');
@@ -93,6 +98,48 @@
   const framePath = (model, color) =>
     `PNG/${model}/${model} - ${color} - Portrait.png`;
 
+  // ─── Downscale an image to a canvas ────────────────────────────────────────
+  function downscaleImage(img, scale) {
+    const w = Math.round(img.naturalWidth * scale);
+    const h = Math.round(img.naturalHeight * scale);
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const cCtx = c.getContext('2d');
+    cCtx.imageSmoothingEnabled = true;
+    cCtx.imageSmoothingQuality = 'high';
+    cCtx.drawImage(img, 0, 0, w, h);
+    return c;
+  }
+
+  // ─── Run detection via worker (returns Promise) ────────────────────────────
+  function detectViaWorker(canvasEl) {
+    return new Promise((resolve, reject) => {
+      const octx = canvasEl.getContext('2d');
+      let imgData;
+      try {
+        imgData = octx.getImageData(0, 0, canvasEl.width, canvasEl.height);
+      } catch (e) {
+        reject(new Error('CORS'));
+        return;
+      }
+      const handler = (e) => {
+        detectWorker.removeEventListener('message', handler);
+        const msg = e.data;
+        if (msg.error) { reject(new Error(msg.error)); return; }
+        const mask = new ImageData(
+          new Uint8ClampedArray(msg.maskBuffer), msg.width, msg.height
+        );
+        resolve({ coords: msg.coords, bounds: msg.bounds, mask });
+      };
+      detectWorker.addEventListener('message', handler);
+      detectWorker.postMessage(
+        { imgData, width: canvasEl.width, height: canvasEl.height },
+        [imgData.data.buffer]
+      );
+    });
+  }
+
   // ─── Color grid ───────────────────────────────────────────────────────────
   function buildColorGrid(model) {
     colorGridEl.innerHTML = '';
@@ -117,36 +164,39 @@
     });
   }
 
-  // ─── Frame loading ────────────────────────────────────────────────────────
-  let loadGeneration = 0; // monotonically increasing; guards against stale worker replies
+  // ─── Frame loading (preview = half-res) ─────────────────────────────────────
+  let loadGeneration = 0;
 
   function loadFrame(model, color) {
     const gen = ++loadGeneration;
-    frameLoaded = false;
-    frameImg = null;
-    frameBounds = null;
-    screenHoleMask = null;
+    previewLoaded = false;
+    previewFrameImg = null;
+    previewMask = null;
+    previewBounds = null;
     frameStatusEl.textContent = 'Loading frame…';
 
     const cacheKey = `${model}|${color}`;
 
-    function applyFrame(img, result, mask) {
-      if (gen !== loadGeneration) return; // stale
-      frameImg = img;
-      screenHoleMask = mask;
-      frameLoaded = true;
-      if (result) frameBounds = result.bounds;
+    function applyPreview(pImg, result, mask) {
+      if (gen !== loadGeneration) return;
+      previewFrameImg = pImg;
+      previewMask = mask;
+      previewLoaded = true;
+      if (result) previewBounds = result.bounds;
 
       frameStatusEl.textContent =
-        `${model} · ${color} · ${img.naturalWidth}×${img.naturalHeight}px`;
+        `${model} · ${color} · ${pImg.width}×${pImg.height}px (preview)`;
 
+      // Calibration coords are stored at full-res scale
       const saved = loadCal(model, color);
       if (saved) {
         setInputsFromCoords(saved);
         setCalStatus(`Loaded saved calibration for ${model} ${color}`, 'ok');
       } else if (result) {
-        setInputsFromCoords(result.coords);
-        saveCal(model, color, result.coords);
+        // Scale coords back to full-res for display/storage
+        const fullCoords = scaleCoords(result.coords, 1 / PREVIEW_SCALE);
+        setInputsFromCoords(fullCoords);
+        saveCal(model, color, fullCoords);
         setCalStatus(`Auto-detected screen area`, 'ok');
       } else {
         setCalStatus('No calibration — click Auto-Detect or enter manually', 'info');
@@ -155,26 +205,10 @@
       composite();
     }
 
-    // Immediately show frame (without screenshot composite) while worker runs
-    function showFramePreview(img) {
-      if (gen !== loadGeneration) return;
-      frameImg = img;
-      frameLoaded = true;
-      frameStatusEl.textContent =
-        `${model} · ${color} · ${img.naturalWidth}×${img.naturalHeight}px · detecting…`;
-
-      // Show frame-only preview (no mask yet, so composite shows fallback)
-      const saved = loadCal(model, color);
-      if (saved) {
-        setInputsFromCoords(saved);
-      }
-      composite();
-    }
-
     // Return cached result immediately
-    if (frameCache[cacheKey]) {
-      const cached = frameCache[cacheKey];
-      applyFrame(cached.img, cached.result, cached.mask);
+    if (frameCache[cacheKey] && frameCache[cacheKey].previewMask) {
+      const c = frameCache[cacheKey];
+      applyPreview(c.previewCanvas, c.previewResult, c.previewMask);
       return;
     }
 
@@ -182,43 +216,33 @@
     img.onload = () => {
       if (gen !== loadGeneration) return;
 
-      // Show frame immediately while detection runs
-      showFramePreview(img);
+      // Downscale for preview
+      const previewCanvas = downscaleImage(img, PREVIEW_SCALE);
 
-      // Extract pixel data on main thread (fast — just drawImage + getImageData)
-      const oc = document.createElement('canvas');
-      oc.width = img.naturalWidth;
-      oc.height = img.naturalHeight;
-      const octx = oc.getContext('2d');
-      octx.drawImage(img, 0, 0);
-      let imgData;
-      try {
-        imgData = octx.getImageData(0, 0, oc.width, oc.height);
-      } catch (e) {
-        setCalStatus('CORS error — serve via http:// not file://', 'err');
-        return;
-      }
+      // Show frame immediately (no mask yet)
+      previewFrameImg = previewCanvas;
+      previewLoaded = true;
+      const saved = loadCal(model, color);
+      if (saved) setInputsFromCoords(saved);
+      frameStatusEl.textContent =
+        `${model} · ${color} · detecting…`;
+      composite();
 
-      // Send to worker for heavy computation
-      const handler = (e) => {
-        detectWorker.removeEventListener('message', handler);
+      // Run detection on half-res in worker
+      detectViaWorker(previewCanvas).then(({ coords, bounds, mask }) => {
         if (gen !== loadGeneration) return;
-        const msg = e.data;
-        if (msg.error) {
-          setCalStatus(msg.error, 'err');
-          return;
-        }
-        const mask = new ImageData(new Uint8ClampedArray(msg.maskBuffer), msg.width, msg.height);
-        const result = { coords: msg.coords, bounds: msg.bounds };
-        screenHoleMask = mask;
-        frameCache[cacheKey] = { img, result, mask };
-        applyFrame(img, result, mask);
-      };
-      detectWorker.addEventListener('message', handler);
-      detectWorker.postMessage(
-        { imgData, width: oc.width, height: oc.height },
-        [imgData.data.buffer]
-      );
+        // Cache: store preview canvas, full-res original, and detection results
+        frameCache[cacheKey] = {
+          previewCanvas, previewResult: { coords, bounds }, previewMask: mask,
+          fullImg: img,
+        };
+        applyPreview(previewCanvas, { coords, bounds }, mask);
+      }).catch(err => {
+        if (gen !== loadGeneration) return;
+        setCalStatus(err.message === 'CORS'
+          ? 'CORS error — serve via http:// not file://'
+          : err.message, 'err');
+      });
     };
     img.onerror = () => {
       if (gen !== loadGeneration) return;
@@ -229,15 +253,19 @@
     img.src = framePath(model, color);
   }
 
-  // ─── Composite ───────────────────────────────────────────────────────────
-  // Compositing pipeline:
-  //   1. Draw screenshot onto offCanvas at the calibrated screen hole position
-  //   2. Apply screenHoleMask via destination-in → screenshot pixels outside
-  //      the squircle (including outer background) are erased
-  //   3. Draw frame on top (source-over) → border covers any remaining edges
-  //   4. Blit to main canvas
+  // ─── Scale coords between preview and full-res ─────────────────────────────
+  function scaleCoords(coords, factor) {
+    return {
+      x: Math.round(coords.x * factor),
+      y: Math.round(coords.y * factor),
+      w: Math.round(coords.w * factor),
+      h: Math.round(coords.h * factor),
+    };
+  }
+
+  // ─── Composite (preview, half-res) ─────────────────────────────────────────
   function composite() {
-    if (!frameLoaded || !screenshotImg) {
+    if (!previewLoaded || !screenshotImg) {
       if (!screenshotImg) {
         canvas.style.display = 'none';
         placeholder.style.display = '';
@@ -245,16 +273,20 @@
       return;
     }
 
-    const coords = getCoordsFromInputs();
+    // Get full-res coords from inputs, scale down for preview
+    const fullCoords = getCoordsFromInputs();
+    const coords = fullCoords ? scaleCoords(fullCoords, PREVIEW_SCALE) : null;
 
-    canvas.width  = frameImg.naturalWidth;
-    canvas.height = frameImg.naturalHeight;
+    const fw = previewFrameImg.width;
+    const fh = previewFrameImg.height;
+
+    canvas.width  = fw;
+    canvas.height = fh;
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.clearRect(0, 0, fw, fh);
 
-    if (coords && screenHoleMask) {
-      // Fit screenshot into screen hole (letterbox / pillarbox)
+    if (coords && previewMask) {
       const sAspect = screenshotImg.naturalWidth / screenshotImg.naturalHeight;
       const aAspect = coords.w / coords.h;
       let drawX, drawY, drawW, drawH;
@@ -267,48 +299,113 @@
       }
 
       const offC = document.createElement('canvas');
-      offC.width  = canvas.width;
-      offC.height = canvas.height;
+      offC.width  = fw;
+      offC.height = fh;
       const offCtx = offC.getContext('2d');
       offCtx.imageSmoothingEnabled = true;
       offCtx.imageSmoothingQuality = 'high';
 
-      // Step 1: draw screenshot
       offCtx.drawImage(screenshotImg, drawX, drawY, drawW, drawH);
 
-      // Step 2: clip to screen hole shape via cached pixel-perfect mask
       const maskC = document.createElement('canvas');
-      maskC.width  = canvas.width;
-      maskC.height = canvas.height;
-      maskC.getContext('2d').putImageData(screenHoleMask, 0, 0);
+      maskC.width  = fw;
+      maskC.height = fh;
+      maskC.getContext('2d').putImageData(previewMask, 0, 0);
       offCtx.globalCompositeOperation = 'destination-in';
       offCtx.drawImage(maskC, 0, 0);
       offCtx.globalCompositeOperation = 'source-over';
 
-      // Step 3: draw frame on top
-      offCtx.drawImage(frameImg, 0, 0, offC.width, offC.height);
-
+      offCtx.drawImage(previewFrameImg, 0, 0, fw, fh);
       ctx.drawImage(offC, 0, 0);
     } else if (coords) {
-      // Fallback (mask not available): rectangular clip
       ctx.save();
       ctx.beginPath();
       ctx.rect(coords.x, coords.y, coords.w, coords.h);
       ctx.clip();
       ctx.drawImage(screenshotImg, coords.x, coords.y, coords.w, coords.h);
       ctx.restore();
-      ctx.drawImage(frameImg, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(previewFrameImg, 0, 0, fw, fh);
     } else {
-      // No calibration: ghost screenshot behind frame
       ctx.globalAlpha = 0.3;
-      ctx.drawImage(screenshotImg, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(screenshotImg, 0, 0, fw, fh);
       ctx.globalAlpha = 1.0;
-      ctx.drawImage(frameImg, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(previewFrameImg, 0, 0, fw, fh);
     }
 
     canvas.style.display = 'block';
     placeholder.style.display = 'none';
     btnDownload.disabled = false;
+  }
+
+  // ─── Full-res composite for download ───────────────────────────────────────
+  function compositeFullRes(fullImg, fullMask, fullBounds) {
+    const fullCoords = getCoordsFromInputs();
+    const fw = fullImg.naturalWidth;
+    const fh = fullImg.naturalHeight;
+
+    const dlCanvas = document.createElement('canvas');
+    dlCanvas.width = fw;
+    dlCanvas.height = fh;
+    const dlCtx = dlCanvas.getContext('2d');
+    dlCtx.imageSmoothingEnabled = true;
+    dlCtx.imageSmoothingQuality = 'high';
+    dlCtx.clearRect(0, 0, fw, fh);
+
+    if (fullCoords && fullMask) {
+      const sAspect = screenshotImg.naturalWidth / screenshotImg.naturalHeight;
+      const aAspect = fullCoords.w / fullCoords.h;
+      let drawX, drawY, drawW, drawH;
+      if (sAspect > aAspect) {
+        drawW = fullCoords.w; drawH = fullCoords.w / sAspect;
+        drawX = fullCoords.x; drawY = fullCoords.y + (fullCoords.h - drawH) / 2;
+      } else {
+        drawH = fullCoords.h; drawW = fullCoords.h * sAspect;
+        drawX = fullCoords.x + (fullCoords.w - drawW) / 2; drawY = fullCoords.y;
+      }
+
+      const offC = document.createElement('canvas');
+      offC.width  = fw;
+      offC.height = fh;
+      const offCtx = offC.getContext('2d');
+      offCtx.imageSmoothingEnabled = true;
+      offCtx.imageSmoothingQuality = 'high';
+
+      offCtx.drawImage(screenshotImg, drawX, drawY, drawW, drawH);
+
+      const maskC = document.createElement('canvas');
+      maskC.width  = fw;
+      maskC.height = fh;
+      maskC.getContext('2d').putImageData(fullMask, 0, 0);
+      offCtx.globalCompositeOperation = 'destination-in';
+      offCtx.drawImage(maskC, 0, 0);
+      offCtx.globalCompositeOperation = 'source-over';
+
+      offCtx.drawImage(fullImg, 0, 0, fw, fh);
+      dlCtx.drawImage(offC, 0, 0);
+    } else if (fullCoords) {
+      dlCtx.save();
+      dlCtx.beginPath();
+      dlCtx.rect(fullCoords.x, fullCoords.y, fullCoords.w, fullCoords.h);
+      dlCtx.clip();
+      dlCtx.drawImage(screenshotImg, fullCoords.x, fullCoords.y, fullCoords.w, fullCoords.h);
+      dlCtx.restore();
+      dlCtx.drawImage(fullImg, 0, 0, fw, fh);
+    } else {
+      dlCtx.globalAlpha = 0.3;
+      dlCtx.drawImage(screenshotImg, 0, 0, fw, fh);
+      dlCtx.globalAlpha = 1.0;
+      dlCtx.drawImage(fullImg, 0, 0, fw, fh);
+    }
+
+    // Crop to frame bounds
+    if (fullBounds) {
+      const { x, y, w, h } = fullBounds;
+      const crop = document.createElement('canvas');
+      crop.width = w; crop.height = h;
+      crop.getContext('2d').drawImage(dlCanvas, x, y, w, h, 0, 0, w, h);
+      return crop.toDataURL('image/png');
+    }
+    return dlCanvas.toDataURL('image/png');
   }
 
   // ─── Model buttons ────────────────────────────────────────────────────────
@@ -353,43 +450,29 @@
 
   // ─── Calibration controls ─────────────────────────────────────────────────
   document.getElementById('btn-auto-detect').addEventListener('click', () => {
-    if (!frameLoaded || !frameImg) { setCalStatus('Load a frame first', 'err'); return; }
+    if (!previewLoaded || !previewFrameImg) { setCalStatus('Load a frame first', 'err'); return; }
     setCalStatus('Scanning pixels…', 'info');
 
-    const oc = document.createElement('canvas');
-    oc.width = frameImg.naturalWidth;
-    oc.height = frameImg.naturalHeight;
-    const octx = oc.getContext('2d');
-    octx.drawImage(frameImg, 0, 0);
-    let imgData;
-    try {
-      imgData = octx.getImageData(0, 0, oc.width, oc.height);
-    } catch (e) {
-      setCalStatus('CORS error — serve via http:// not file://', 'err');
-      return;
-    }
-
-    const handler = (e) => {
-      detectWorker.removeEventListener('message', handler);
-      const msg = e.data;
-      if (msg.error) { setCalStatus(msg.error, 'err'); return; }
-      const mask = new ImageData(new Uint8ClampedArray(msg.maskBuffer), msg.width, msg.height);
-      screenHoleMask = mask;
-      if (msg.bounds) frameBounds = msg.bounds;
-      setInputsFromCoords(msg.coords);
-      saveCal(currentModel, currentColor, msg.coords);
-      const { x, y, w, h } = msg.coords;
-      setCalStatus(`Detected: x=${Math.round(x)} y=${Math.round(y)} w=${Math.round(w)} h=${Math.round(h)}`, 'ok');
+    detectViaWorker(previewFrameImg).then(({ coords, bounds, mask }) => {
+      previewMask = mask;
+      if (bounds) previewBounds = bounds;
+      const fullCoords = scaleCoords(coords, 1 / PREVIEW_SCALE);
+      setInputsFromCoords(fullCoords);
+      saveCal(currentModel, currentColor, fullCoords);
+      const { x, y, w, h } = fullCoords;
+      setCalStatus(`Detected: x=${x} y=${y} w=${w} h=${h}`, 'ok');
 
       const cacheKey = `${currentModel}|${currentColor}`;
-      frameCache[cacheKey] = { img: frameImg, result: { coords: msg.coords, bounds: msg.bounds }, mask };
+      if (frameCache[cacheKey]) {
+        frameCache[cacheKey].previewMask = mask;
+        frameCache[cacheKey].previewResult = { coords, bounds };
+      }
       composite();
-    };
-    detectWorker.addEventListener('message', handler);
-    detectWorker.postMessage(
-      { imgData, width: oc.width, height: oc.height },
-      [imgData.data.buffer]
-    );
+    }).catch(err => {
+      setCalStatus(err.message === 'CORS'
+        ? 'CORS error — serve via http:// not file://'
+        : err.message, 'err');
+    });
   });
 
   document.getElementById('btn-apply-cal').addEventListener('click', () => {
@@ -402,28 +485,68 @@
 
   Object.values(calInputs).forEach(input => input.addEventListener('input', () => composite()));
 
-  // ─── Download ─────────────────────────────────────────────────────────────
+  // ─── Download (full-res on demand) ─────────────────────────────────────────
   btnDownload.addEventListener('click', () => {
-    if (!frameLoaded || !screenshotImg) return;
-    try {
-      let url;
-      if (frameBounds) {
-        const { x, y, w, h } = frameBounds;
-        const crop = document.createElement('canvas');
-        crop.width = w; crop.height = h;
-        crop.getContext('2d').drawImage(canvas, x, y, w, h, 0, 0, w, h);
-        url = crop.toDataURL('image/png');
-      } else {
-        url = canvas.toDataURL('image/png');
+    if (!previewLoaded || !screenshotImg) return;
+
+    const cacheKey = `${currentModel}|${currentColor}`;
+    const cached = frameCache[cacheKey];
+
+    // If we have a cached full-res mask, use it directly
+    if (cached && cached.fullMask) {
+      try {
+        const url = compositeFullRes(cached.fullImg, cached.fullMask, cached.fullBounds);
+        triggerDownload(url);
+      } catch (e) {
+        alert('Download failed — ensure you are using http:// not file://');
       }
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${currentModel.toLowerCase().replace(/\s+/g, '')}-${currentColor.toLowerCase().replace(/\s+/g, '-')}-mockup.png`;
-      a.click();
-    } catch (e) {
-      alert('Download failed — ensure you are using http://localhost (not file://) to avoid CORS restrictions.');
+      return;
     }
+
+    // Otherwise, run full-res detection then download
+    btnDownload.disabled = true;
+    btnDownload.textContent = 'Preparing HD…';
+
+    const fullImg = cached ? cached.fullImg : null;
+    if (!fullImg) {
+      alert('Frame not loaded');
+      btnDownload.disabled = false;
+      btnDownload.textContent = 'Download PNG';
+      return;
+    }
+
+    const fullCanvas = document.createElement('canvas');
+    fullCanvas.width = fullImg.naturalWidth;
+    fullCanvas.height = fullImg.naturalHeight;
+    const fCtx = fullCanvas.getContext('2d');
+    fCtx.drawImage(fullImg, 0, 0);
+
+    detectViaWorker(fullCanvas).then(({ coords, bounds, mask }) => {
+      // Cache the full-res results
+      cached.fullMask = mask;
+      cached.fullBounds = bounds;
+      cached.fullCoords = coords;
+
+      try {
+        const url = compositeFullRes(fullImg, mask, bounds);
+        triggerDownload(url);
+      } catch (e) {
+        alert('Download failed — ensure you are using http:// not file://');
+      }
+    }).catch(err => {
+      alert('Detection failed: ' + err.message);
+    }).finally(() => {
+      btnDownload.disabled = false;
+      btnDownload.textContent = 'Download PNG';
+    });
   });
+
+  function triggerDownload(url) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${currentModel.toLowerCase().replace(/\s+/g, '')}-${currentColor.toLowerCase().replace(/\s+/g, '-')}-mockup.png`;
+    a.click();
+  }
 
   // ─── Sidebar toggle ───────────────────────────────────────────────────────
   const sidebarEl   = document.getElementById('sidebar');
@@ -471,7 +594,6 @@
   openBtn.addEventListener('click', openSidebar);
 
   backdropEl.addEventListener('click', closeSidebar);
-
 
   // ─── Init ─────────────────────────────────────────────────────────────────
   buildColorGrid(currentModel);
