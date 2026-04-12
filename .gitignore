@@ -9,3 +9,10 @@ desktop.ini
 
 # Empty frames directory (kept for legacy reference)
 frames/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
