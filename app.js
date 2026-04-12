@@ -475,12 +475,6 @@
 
   backdropEl.addEventListener('click', closeSidebar);
 
-  // Close sidebar when a model or color is selected on mobile
-  document.querySelectorAll('.model-btn, #color-grid').forEach(el => {
-    el.addEventListener('click', () => {
-      if (isMobile()) closeSidebar();
-    });
-  });
 
   // ─── Init ─────────────────────────────────────────────────────────────────
   buildColorGrid(currentModel);
