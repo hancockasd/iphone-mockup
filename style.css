@@ -206,6 +206,7 @@ header .subtitle {
 .section {
   padding: 18px 20px;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .section:last-child {
@@ -537,6 +538,8 @@ header .subtitle {
 
 .download-section {
   padding: 18px 20px;
+  padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  flex-shrink: 0;
 }
 
 #btn-download {
@@ -738,15 +741,18 @@ header .subtitle {
     position: fixed;
     top: var(--header-height);
     left: 0;
+    bottom: 0;
     width: min(var(--sidebar-width), 85vw);
-    height: calc(100vh - var(--header-height));
     z-index: 201;
     transform: translateX(-105%);
     transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
     box-shadow: 4px 0 40px rgba(0, 0, 0, 0.6);
     border-right: 1px solid var(--border-light);
-    display: block;
+    display: flex;
+    flex-direction: column;
     overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
   }
 

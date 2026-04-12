@@ -11,6 +11,9 @@
   // Cache for autoDetectScreen results and loaded Image objects, keyed by "model|color"
   const frameCache = {}; // key -> { img, result: { coords, bounds }, mask: ImageData }
 
+  // Web Worker for off-thread screen detection
+  const detectWorker = new Worker('detect-worker.js');
+
   const MODEL_COLORS = {
     'iPhone 17':         ['Black', 'White', 'Lavender', 'Mist Blue', 'Sage'],
     'iPhone 17 Pro':     ['Cosmic Orange', 'Deep Blue', 'Silver'],
@@ -114,112 +117,11 @@
     });
   }
 
-  // ─── Auto-detect screen hole ──────────────────────────────────────────────
-  // The frame PNG has two kinds of transparent regions (alpha ≈ 0):
-  //   1. Outer background — outside the phone silhouette
-  //   2. Screen hole     — the display cutout inside the phone
-  // We can't distinguish them by alpha alone, so we flood-fill from the image
-  // edges to mark all "outer" transparent pixels, then everything remaining
-  // that is still transparent must be the screen hole.
-  //
-  // Returns { coords, bounds } where:
-  //   coords — bounding box of the screen hole (used for screenshot placement)
-  //   bounds — bounding box of all opaque pixels (used to crop download output)
-  //
-  // Side-effect: sets screenHoleMask — an ImageData where each pixel's alpha
-  // equals (255 - frameAlpha) for inner pixels and 0 for outer background.
-  // Applied via destination-in compositing, this clips the screenshot to the
-  // exact squircle shape of the screen hole with pixel-perfect anti-aliasing.
-  function autoDetectScreen(img) {
-    const oc = document.createElement('canvas');
-    oc.width = img.naturalWidth;
-    oc.height = img.naturalHeight;
-    const octx = oc.getContext('2d');
-    octx.drawImage(img, 0, 0);
-
-    const { width: w, height: h } = oc;
-    let imgData;
-    try {
-      imgData = octx.getImageData(0, 0, w, h);
-    } catch (e) {
-      setCalStatus('CORS error — serve via http:// not file://', 'err');
-      return null;
-    }
-
-    const data = imgData.data;
-    const alphaAt = (x, y) => data[(y * w + x) * 4 + 3];
-    const isTransparent = (x, y) => alphaAt(x, y) < 10;
-
-    // Flood-fill from all four edges to identify outer background pixels.
-    const outerMask = new Uint8Array(w * h);
-    const queue = [];
-    const enqueue = (x, y) => {
-      const idx = y * w + x;
-      if (outerMask[idx] === 0 && isTransparent(x, y)) {
-        outerMask[idx] = 1;
-        queue.push(x, y);
-      }
-    };
-    for (let x = 0; x < w; x++) { enqueue(x, 0); enqueue(x, h - 1); }
-    for (let y = 0; y < h; y++) { enqueue(0, y); enqueue(w - 1, y); }
-    for (let qi = 0; qi < queue.length;) {
-      const cx = queue[qi++], cy = queue[qi++];
-      if (cx > 0)     enqueue(cx - 1, cy);
-      if (cx < w - 1) enqueue(cx + 1, cy);
-      if (cy > 0)     enqueue(cx, cy - 1);
-      if (cy < h - 1) enqueue(cx, cy + 1);
-    }
-
-    // Single pass: collect screen-hole bounding box (inner transparent pixels)
-    // and frame bounding box (opaque pixels) simultaneously.
-    let sMinX = w, sMinY = h, sMaxX = 0, sMaxY = 0; // screen hole
-    let fMinX = w, fMinY = h, fMaxX = 0, fMaxY = 0; // frame (opaque)
-    let holeFound = false;
-
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const idx = y * w + x;
-        if (isTransparent(x, y) && outerMask[idx] === 0) {
-          if (x < sMinX) sMinX = x; if (x > sMaxX) sMaxX = x;
-          if (y < sMinY) sMinY = y; if (y > sMaxY) sMaxY = y;
-          holeFound = true;
-        } else if (!isTransparent(x, y)) {
-          if (x < fMinX) fMinX = x; if (x > fMaxX) fMaxX = x;
-          if (y < fMinY) fMinY = y; if (y > fMaxY) fMaxY = y;
-        }
-      }
-    }
-
-    if (!holeFound) {
-      setCalStatus('No inner transparent region found', 'err');
-      return null;
-    }
-
-    const coords = { x: sMinX, y: sMinY, w: sMaxX - sMinX + 1, h: sMaxY - sMinY + 1 };
-    const bounds = fMinX <= fMaxX
-      ? { x: fMinX, y: fMinY, w: fMaxX - fMinX + 1, h: fMaxY - fMinY + 1 }
-      : null;
-
-    // Build pixel-perfect screen hole mask.
-    // Inner pixels:  mask alpha = 255 - frameAlpha
-    //   → fully transparent where border is opaque (masks out screenshot)
-    //   → fully opaque where hole is transparent (lets screenshot through)
-    //   → smooth gradient at anti-aliased squircle edges
-    // Outer pixels:  mask alpha = 0 (always hides screenshot outside phone)
-    const maskData = octx.createImageData(w, h);
-    const md = maskData.data;
-    for (let i = 0; i < w * h; i++) {
-      const px = i * 4;
-      md[px] = md[px + 1] = md[px + 2] = 255;
-      md[px + 3] = outerMask[i] === 1 ? 0 : 255 - alphaAt(i % w, (i / w) | 0);
-    }
-    screenHoleMask = maskData;
-
-    return { coords, bounds };
-  }
-
   // ─── Frame loading ────────────────────────────────────────────────────────
+  let loadGeneration = 0; // monotonically increasing; guards against stale worker replies
+
   function loadFrame(model, color) {
+    const gen = ++loadGeneration;
     frameLoaded = false;
     frameImg = null;
     frameBounds = null;
@@ -229,6 +131,7 @@
     const cacheKey = `${model}|${color}`;
 
     function applyFrame(img, result, mask) {
+      if (gen !== loadGeneration) return; // stale
       frameImg = img;
       screenHoleMask = mask;
       frameLoaded = true;
@@ -252,7 +155,23 @@
       composite();
     }
 
-    // Return cached result immediately — no re-download, no re-computation
+    // Immediately show frame (without screenshot composite) while worker runs
+    function showFramePreview(img) {
+      if (gen !== loadGeneration) return;
+      frameImg = img;
+      frameLoaded = true;
+      frameStatusEl.textContent =
+        `${model} · ${color} · ${img.naturalWidth}×${img.naturalHeight}px · detecting…`;
+
+      // Show frame-only preview (no mask yet, so composite shows fallback)
+      const saved = loadCal(model, color);
+      if (saved) {
+        setInputsFromCoords(saved);
+      }
+      composite();
+    }
+
+    // Return cached result immediately
     if (frameCache[cacheKey]) {
       const cached = frameCache[cacheKey];
       applyFrame(cached.img, cached.result, cached.mask);
@@ -261,12 +180,48 @@
 
     const img = new Image();
     img.onload = () => {
-      const result = autoDetectScreen(img);
-      const mask = screenHoleMask; // set as side-effect by autoDetectScreen
-      frameCache[cacheKey] = { img, result, mask };
-      applyFrame(img, result, mask);
+      if (gen !== loadGeneration) return;
+
+      // Show frame immediately while detection runs
+      showFramePreview(img);
+
+      // Extract pixel data on main thread (fast — just drawImage + getImageData)
+      const oc = document.createElement('canvas');
+      oc.width = img.naturalWidth;
+      oc.height = img.naturalHeight;
+      const octx = oc.getContext('2d');
+      octx.drawImage(img, 0, 0);
+      let imgData;
+      try {
+        imgData = octx.getImageData(0, 0, oc.width, oc.height);
+      } catch (e) {
+        setCalStatus('CORS error — serve via http:// not file://', 'err');
+        return;
+      }
+
+      // Send to worker for heavy computation
+      const handler = (e) => {
+        detectWorker.removeEventListener('message', handler);
+        if (gen !== loadGeneration) return;
+        const msg = e.data;
+        if (msg.error) {
+          setCalStatus(msg.error, 'err');
+          return;
+        }
+        const mask = new ImageData(new Uint8ClampedArray(msg.maskBuffer), msg.width, msg.height);
+        const result = { coords: msg.coords, bounds: msg.bounds };
+        screenHoleMask = mask;
+        frameCache[cacheKey] = { img, result, mask };
+        applyFrame(img, result, mask);
+      };
+      detectWorker.addEventListener('message', handler);
+      detectWorker.postMessage(
+        { imgData, width: oc.width, height: oc.height },
+        [imgData.data.buffer]
+      );
     };
     img.onerror = () => {
+      if (gen !== loadGeneration) return;
       frameStatusEl.textContent = 'Frame not found';
       setCalStatus(`File not found: ${framePath(model, color)}`, 'err');
       composite();
@@ -400,17 +355,41 @@
   document.getElementById('btn-auto-detect').addEventListener('click', () => {
     if (!frameLoaded || !frameImg) { setCalStatus('Load a frame first', 'err'); return; }
     setCalStatus('Scanning pixels…', 'info');
-    setTimeout(() => {
-      const result = autoDetectScreen(frameImg);
-      if (result) {
-        if (result.bounds) frameBounds = result.bounds;
-        setInputsFromCoords(result.coords);
-        saveCal(currentModel, currentColor, result.coords);
-        const { x, y, w, h } = result.coords;
-        setCalStatus(`Detected: x=${Math.round(x)} y=${Math.round(y)} w=${Math.round(w)} h=${Math.round(h)}`, 'ok');
-        composite();
-      }
-    }, 50);
+
+    const oc = document.createElement('canvas');
+    oc.width = frameImg.naturalWidth;
+    oc.height = frameImg.naturalHeight;
+    const octx = oc.getContext('2d');
+    octx.drawImage(frameImg, 0, 0);
+    let imgData;
+    try {
+      imgData = octx.getImageData(0, 0, oc.width, oc.height);
+    } catch (e) {
+      setCalStatus('CORS error — serve via http:// not file://', 'err');
+      return;
+    }
+
+    const handler = (e) => {
+      detectWorker.removeEventListener('message', handler);
+      const msg = e.data;
+      if (msg.error) { setCalStatus(msg.error, 'err'); return; }
+      const mask = new ImageData(new Uint8ClampedArray(msg.maskBuffer), msg.width, msg.height);
+      screenHoleMask = mask;
+      if (msg.bounds) frameBounds = msg.bounds;
+      setInputsFromCoords(msg.coords);
+      saveCal(currentModel, currentColor, msg.coords);
+      const { x, y, w, h } = msg.coords;
+      setCalStatus(`Detected: x=${Math.round(x)} y=${Math.round(y)} w=${Math.round(w)} h=${Math.round(h)}`, 'ok');
+
+      const cacheKey = `${currentModel}|${currentColor}`;
+      frameCache[cacheKey] = { img: frameImg, result: { coords: msg.coords, bounds: msg.bounds }, mask };
+      composite();
+    };
+    detectWorker.addEventListener('message', handler);
+    detectWorker.postMessage(
+      { imgData, width: oc.width, height: oc.height },
+      [imgData.data.buffer]
+    );
   });
 
   document.getElementById('btn-apply-cal').addEventListener('click', () => {
