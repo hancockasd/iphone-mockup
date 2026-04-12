@@ -182,12 +182,14 @@ header .subtitle {
   background: rgba(0, 0, 0, 0.7);
   z-index: 200;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 0.3s;
   backdrop-filter: blur(4px);
 }
 
 .sidebar-backdrop.is-visible {
   opacity: 1;
+  pointer-events: auto;
 }
 
 /* ─── Sidebar ──────────────────────────────────────────────────────────────── */
